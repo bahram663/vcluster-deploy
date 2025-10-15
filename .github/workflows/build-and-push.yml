@@ -9,14 +9,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
+      id-token: write   # required for OIDC login
       contents: read
     env:
       ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AKS_CLUSTER: ${{ vars.AZURE_AKS_CLUSTER }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Azure login (OIDC)
+      - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -25,20 +28,15 @@ jobs:
 
       - name: Get ACR login server
         id: acr
-        run: |
-          echo "SERVER=$(az acr show -n $ACR_NAME --query loginServer -o tsv)" >> $GITHUB_OUTPUT
+        run: echo "SERVER=$(az acr show -n $ACR_NAME --query loginServer -o tsv)" >> $GITHUB_OUTPUT
 
       - name: Docker Buildx setup
         uses: docker/setup-buildx-action@v3
 
-      - name: ACR Login
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ steps.acr.outputs.SERVER }}
-          username: 00000000-0000-0000-0000-000000000000
-          password: ${{ steps.acr.outputs.SERVER }}
+      - name: Azure ACR login
+        run: az acr login -n $ACR_NAME
 
-      - name: Build & Push
+      - name: Build & Push Image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -48,5 +46,3 @@ jobs:
             ${{ steps.acr.outputs.SERVER }}/pyapp:${{ github.sha }}
             ${{ steps.acr.outputs.SERVER }}/pyapp:${{ github.ref_name }}
             ${{ steps.acr.outputs.SERVER }}/pyapp:latest
-
-
