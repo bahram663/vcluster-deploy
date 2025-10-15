@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pyapp.fullname" . }}
+  labels: {{- include "pyapp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{- include "pyapp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "pyapp.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: pyapp
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.targetPort }}
+          env:
+            - name: APP_ENV
+              value: {{ .Values.env.APP_ENV | quote }}
+            - name: APP_MESSAGE
+              value: {{ .Values.env.APP_MESSAGE | quote }}
+
+
