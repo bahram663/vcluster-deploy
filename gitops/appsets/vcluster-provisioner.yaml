@@ -2,13 +2,13 @@ apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
   name: vcluster-provisioner
+  namespace: argocd
 spec:
   generators:
     - git:
         repoURL: https://github.com/bahram663/vcluster-deploy.git
         revision: main
         branches:
-          - "main"
           - "feature-*"
   template:
     metadata:
@@ -22,14 +22,12 @@ spec:
         helm:
           releaseName: "{{branch}}"
           values: |
-            expose:
-              type: LoadBalancer
             syncer:
               extraArgs:
-                - --tls-san={{branch}}.vcluster.test.bahram.az
+                - --tls-san={{branch}}.vcluster.bahram.az
             ingress:
               enabled: true
-              host: "{{branch}}.vcluster.test.bahram.az"
+              host: "{{branch}}.vcluster.bahram.az"
       destination:
         server: https://kubernetes.default.svc
         namespace: "{{branch}}-vcluster"

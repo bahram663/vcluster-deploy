@@ -2,13 +2,13 @@ apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
   name: app-deployer
+  namespace: argocd
 spec:
   generators:
     - git:
         repoURL: https://github.com/bahram663/vcluster-deploy.git
         revision: main
         branches:
-          - "main"
           - "feature-*"
   template:
     metadata:
@@ -17,20 +17,17 @@ spec:
       project: default
       source:
         repoURL: https://github.com/bahram663/vcluster-deploy.git
-        targetRevision: "{{branch}}"
         path: helm/pyapp
+        targetRevision: main
         helm:
+          releaseName: "{{branch}}-pyapp"
           values: |
-            image:
-              repository: acrvclusterpoc.azurecr.io/pyapp
-              tag: "{{branch}}"
             ingress:
               enabled: true
-              className: nginx
               host: "{{branch}}.test.bahram.az"
       destination:
-        name: "{{branch}}-vcluster"
-        namespace: pyapp
+        server: https://{{branch}}-vcluster.default.svc.cluster.local
+        namespace: default
       syncPolicy:
         automated:
           prune: true
