@@ -10,6 +10,8 @@ spec:
         revision: main
         branches:
           - "feature-*"
+          - "dev"
+          - "test"
   template:
     metadata:
       name: "{{branch}}-pyapp"
@@ -22,12 +24,16 @@ spec:
         helm:
           releaseName: "{{branch}}-pyapp"
           values: |
+            image:
+              repository: acrvclusterpoc.azurecr.io/pyapp
+              tag: "{{branch}}"
             ingress:
               enabled: true
+              className: nginx
               host: "{{branch}}.test.bahram.az"
       destination:
         server: https://{{branch}}-vcluster.default.svc.cluster.local
-        namespace: default
+        namespace: pyapp
       syncPolicy:
         automated:
           prune: true

@@ -10,6 +10,8 @@ spec:
         revision: main
         branches:
           - "feature-*"
+          - "dev"
+          - "test"
   template:
     metadata:
       name: "{{branch}}-vcluster"
@@ -22,12 +24,14 @@ spec:
         helm:
           releaseName: "{{branch}}"
           values: |
+            expose:
+              type: LoadBalancer
             syncer:
               extraArgs:
-                - --tls-san={{branch}}.vcluster.bahram.az
+                - --tls-san={{branch}}.vcluster.test.bahram.az
             ingress:
               enabled: true
-              host: "{{branch}}.vcluster.bahram.az"
+              host: "{{branch}}.vcluster.test.bahram.az"
       destination:
         server: https://kubernetes.default.svc
         namespace: "{{branch}}-vcluster"
