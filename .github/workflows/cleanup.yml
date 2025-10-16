@@ -1,4 +1,4 @@
-name: Cleanup on branch delete
+name: Cleanup vCluster on Branch Delete
 
 on:
   delete:
@@ -8,28 +8,29 @@ jobs:
   cleanup:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
       contents: read
-    env:
-      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
-      AKS: ${{ vars.AZURE_AKS_CLUSTER }}
     steps:
-      - name: Azure login (OIDC)
+      - name: Azure Login (client secret)
         uses: azure/login@v2
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Set kubectl context
+      - name: Set AKS context
         uses: azure/aks-set-context@v4
         with:
-          resource-group: ${{ env.RG }}
-          cluster-name: ${{ env.AKS }}
+          resource-group: ${{ vars.AZURE_RESOURCE_GROUP }}
+          cluster-name: ${{ vars.AZURE_AKS_CLUSTER }}
 
-      - name: Delete release and namespace
+      - name: Install vcluster CLI
+        run: |
+          curl -sSL -o vcluster "https://github.com/loft-sh/vcluster/releases/latest/download/vcluster-linux-amd64"
+          chmod +x vcluster
+          sudo mv vcluster /usr/local/bin/vcluster
+
+      - name: Delete vcluster & namespace
         run: |
           NS=$(echo "${GITHUB_REF_NAME}" | tr '/._' '-' | tr '[:upper:]' '[:lower:]')
-          echo "🧹 Cleaning up namespace: $NS"
-          helm uninstall pyapp -n "$NS" || true
-          kubectl delete ns "$NS" --ignore-not-found=true
+          VC="vc-${NS}"
+          echo "Deleting vcluster=$VC in namespace=$NS"
+          # Delete vcluster if exists
+          vcluster delete "$VC" -n "$NS" --delete-namespace || true
