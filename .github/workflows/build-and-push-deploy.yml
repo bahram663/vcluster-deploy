@@ -1,28 +1,26 @@
-name: Build & Deploy to AKS
+name: Manage Azure Federated Credential for Feature Branches
 
 on:
-  push:
-    branches: ["**"]
-  pull_request:
-  workflow_dispatch:
+  create:
+    branches:
+      - feature-*
+  delete:
+    branches:
+      - feature-*
+
+permissions:
+  id-token: write
+  contents: read
 
 env:
-  ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
-  RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
-  AKS_CLUSTER: ${{ vars.AZURE_AKS_CLUSTER }}
+  APP_ID: ${{ vars.AZURE_CLIENT_ID }}   # your Azure AD App Registration ID
 
 jobs:
-  build:
-    name: Build & Push to ACR
+  create-federated-credential:
+    if: github.event.ref_type == 'branch'
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write       # required for OIDC
-      contents: read
+    name: Register Azure Federated Credential
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      # 🔐 Login to Azure using OIDC (no secrets)
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -30,51 +28,28 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # 🏷️ Get ACR login server
-      - name: Get ACR login server
-        id: acr
-        run: echo "SERVER=$(az acr show -n $ACR_NAME --query loginServer -o tsv)" >> $GITHUB_OUTPUT
-
-      # ⚙️ Setup Docker Buildx
-      - name: Docker Buildx setup
-        uses: docker/setup-buildx-action@v3
-
-      # 🔑 Login Docker to ACR via OIDC Token
-      - name: Azure ACR Login (OIDC)
-        id: login
+      - name: Register Federated Credential for Branch
         run: |
-          SERVER=$(az acr show -n $ACR_NAME --query loginServer -o tsv)
-          TOKEN=$(az acr login -n $ACR_NAME --expose-token --query accessToken -o tsv)
-          echo $TOKEN | docker login $SERVER -u 00000000-0000-0000-0000-000000000000 --password-stdin
+          BRANCH=${GITHUB_REF_NAME}
+          SUBJECT="repo:${{ github.repository }}:ref:refs/heads/${BRANCH}"
+          echo "Creating federated identity for ${SUBJECT}"
 
-      # 🐳 Build & Push Image to ACR
-      - name: Build & Push Image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: |
-            ${{ steps.acr.outputs.SERVER }}/pyapp:${{ github.sha }}
-            ${{ steps.acr.outputs.SERVER }}/pyapp:${{ github.ref_name }}
-            ${{ steps.acr.outputs.SERVER }}/pyapp:latest
+          az ad app federated-credential create \
+            --id $APP_ID \
+            --parameters "{
+              \"name\": \"github-actions-${BRANCH}\",
+              \"issuer\": \"https://token.actions.githubusercontent.com\",
+              \"subject\": \"${SUBJECT}\",
+              \"audiences\": [\"api://AzureADTokenExchange\"]
+            }"
+    outputs:
+      branch: ${{ github.ref_name }}
 
-  deploy:
-    name: Deploy to AKS via Helm
+  delete-federated-credential:
+    if: github.event.ref_type == 'branch'
     runs-on: ubuntu-latest
-    needs: build
-    permissions:
-      id-token: write
-      contents: read
-    env:
-      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
-      AKS: ${{ vars.AZURE_AKS_CLUSTER }}
-      ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+    name: Remove Azure Federated Credential
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      # 🔐 Login to Azure again (each job = new OIDC token)
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -82,43 +57,15 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # ⎈ Set kubectl context for AKS
-      - name: Set AKS context
-        uses: azure/aks-set-context@v4
-        with:
-          resource-group: ${{ env.RG }}
-          cluster-name: ${{ env.AKS }}
-
-      # ⚙️ Setup Helm
-      - name: Setup Helm
-        uses: azure/setup-helm@v4
-
-      # 🔖 Get ACR login server again
-      - name: Get ACR server
-        id: acr
-        run: echo "SERVER=$(az acr show -n $ACR_NAME --query loginServer -o tsv)" >> $GITHUB_OUTPUT
-
-      # 🧩 Prepare branch-based namespace
-      - name: Prepare namespace name
-        id: ns
+      - name: Delete Federated Credential
         run: |
-          NS=$(echo "${GITHUB_REF_NAME}" | tr '/._' '-' | tr '[:upper:]' '[:lower:]')
-          echo "NS=$NS" >> $GITHUB_OUTPUT
-
-      # 🧱 Create namespace if not exists
-      - name: Create namespace
-        run: kubectl create ns ${{ steps.ns.outputs.NS }} --dry-run=client -o yaml | kubectl apply -f -
-
-      # 🚀 Deploy app using Helm
-      - name: Deploy with Helm
-        run: |
-          IMAGE=$(az acr show -n $ACR_NAME --query loginServer -o tsv)/pyapp:${{ github.sha }}
-          helm upgrade --install pyapp ./helm/pyapp \
-            -n ${{ steps.ns.outputs.NS }} \
-            --set image.repository=$(az acr show -n $ACR_NAME --query loginServer -o tsv)/pyapp \
-            --set image.tag=${{ github.sha }} \
-            --set env.APP_ENV=${{ steps.ns.outputs.NS }}
-
-      # ✅ Verify deployment
-      - name: Verify pods
-        run: kubectl get pods -n ${{ steps.ns.outputs.NS }}
+          BRANCH=${GITHUB_REF_NAME}
+          NAME="github-actions-${BRANCH}"
+          echo "Deleting federated credential named ${NAME} from Azure App $APP_ID"
+          ID=$(az ad app federated-credential list --id $APP_ID --query "[?name=='${NAME}'].id" -o tsv)
+          if [ -n "$ID" ]; then
+            az ad app federated-credential delete --id $APP_ID --federated-credential-id $ID
+            echo "✅ Federated credential '${NAME}' deleted"
+          else
+            echo "⚠️ No federated credential found for ${NAME}"
+          fi
