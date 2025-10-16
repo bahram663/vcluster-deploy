@@ -4,6 +4,7 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  workflow_dispatch:
 
 env:
   ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
@@ -12,13 +13,16 @@ env:
 
 jobs:
   build:
+    name: Build & Push to ACR
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
+      id-token: write       # required for OIDC
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
+      # 🔐 Azure login via OIDC (no secrets)
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -26,11 +30,26 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # 🏷️ Get ACR server name
       - name: Get ACR login server
         id: acr
         run: echo "SERVER=$(az acr show -n $ACR_NAME --query loginServer -o tsv)" >> $GITHUB_OUTPUT
 
-      - name: Build & Push
+      # ⚙️ Setup Docker Buildx
+      - name: Docker Buildx setup
+        uses: docker/setup-buildx-action@v3
+
+      # 🔑 Authenticate Docker to ACR using OIDC
+      - name: Azure ACR Login (OIDC)
+        uses: azure/docker-login@v2
+        with:
+          login-server: ${{ steps.acr.outputs.SERVER }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # 🐳 Build & Push image to ACR
+      - name: Build & Push Image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -39,33 +58,49 @@ jobs:
           tags: |
             ${{ steps.acr.outputs.SERVER }}/pyapp:${{ github.sha }}
             ${{ steps.acr.outputs.SERVER }}/pyapp:${{ github.ref_name }}
+            ${{ steps.acr.outputs.SERVER }}/pyapp:latest
 
   deploy:
-    needs: build
+    name: Deploy to AKS via Helm
     runs-on: ubuntu-latest
+    needs: build
     permissions:
       id-token: write
       contents: read
+    env:
+      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AKS: ${{ vars.AZURE_AKS_CLUSTER }}
+      ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Azure Login (OIDC)
+      # 🔐 Azure login via OIDC again (each job needs new token)
+      - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # ⎈ Configure kubectl context for AKS
       - name: Set AKS context
         uses: azure/aks-set-context@v4
         with:
-          resource-group: ${{ env.RESOURCE_GROUP }}
-          cluster-name: ${{ env.AKS_CLUSTER }}
+          resource-group: ${{ env.RG }}
+          cluster-name: ${{ env.AKS }}
 
+      # ⚙️ Install Helm
       - name: Install Helm
         uses: azure/setup-helm@v4
 
-      - name: Namespace from branch
+      # 🔖 Get ACR login server
+      - name: Get ACR server
+        id: acr
+        run: echo "SERVER=$(az acr show -n $ACR_NAME --query loginServer -o tsv)" >> $GITHUB_OUTPUT
+
+      # 🧩 Prepare namespace (branch-based)
+      - name: Prepare namespace name
         id: ns
         run: |
           NS=$(echo "${GITHUB_REF_NAME}" | tr '/._' '-' | tr '[:upper:]' '[:lower:]')
@@ -74,11 +109,17 @@ jobs:
       - name: Create namespace if missing
         run: kubectl create ns ${{ steps.ns.outputs.NS }} --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Deploy with Helm
+      # 🚀 Deploy Helm chart
+      - name: Helm upgrade/install
         run: |
-          IMAGE=$(az acr show -n $ACR_NAME --query loginServer -o tsv)/pyapp:${{ github.sha }}
-          helm upgrade --install pyapp ./helm/pyapp \
+          IMAGE="${{ steps.acr.outputs.SERVER }}/pyapp:${{ github.sha }}"
+          helm upgrade --install pyapp \
+            ./helm/pyapp \
             -n ${{ steps.ns.outputs.NS }} \
-            --set image.repository=$(az acr show -n $ACR_NAME --query loginServer -o tsv)/pyapp \
+            --set image.repository=${{ steps.acr.outputs.SERVER }}/pyapp \
             --set image.tag=${{ github.sha }} \
             --set env.APP_ENV=${{ steps.ns.outputs.NS }}
+
+      # ✅ Verify deployment (optional)
+      - name: Verify pods
+        run: kubectl get pods -n ${{ steps.ns.outputs.NS }}
