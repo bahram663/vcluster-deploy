@@ -3,11 +3,14 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "pyapp.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "pyapp.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
   annotations: {}
 spec:
-  ingressClassName: {{ .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className | quote }}
   rules:
-    - host: {{ .Values.ingress.host | quote }}
+    - host: {{ printf "%s.%s" .Release.Namespace .Values.ingress.baseDomain | quote }}
       http:
         paths:
           - path: /
@@ -17,12 +20,4 @@ spec:
                 name: {{ include "pyapp.fullname" . }}
                 port:
                   number: {{ .Values.service.port }}
-  {{- if .Values.ingress.tlsEnabled }}
-  tls:
-    - hosts:
-        - {{ .Values.ingress.host | quote }}
-      secretName: {{ .Values.ingress.tlsSecretName }}
-  {{- end }}
 {{- end }}
-
-

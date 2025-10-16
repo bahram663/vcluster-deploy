@@ -17,7 +17,7 @@ service:
 ingress:
   enabled: true
   className: nginx
-  host: ""
+  host: "test.bahram.az"
   tlsEnabled: false
   tlsSecretName: ""
 
