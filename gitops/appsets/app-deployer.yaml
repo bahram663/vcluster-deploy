@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: vcluster-provisioner
+  name: app-deployer
 spec:
   generators:
     - git:
@@ -12,27 +12,25 @@ spec:
           - "feature-*"
   template:
     metadata:
-      name: "{{branch}}-vcluster"
+      name: "{{branch}}-pyapp"
     spec:
       project: default
       source:
-        repoURL: https://charts.loft.sh
-        chart: vcluster
-        targetRevision: 0.20.0
+        repoURL: https://github.com/bahram663/vcluster-deploy.git
+        targetRevision: "{{branch}}"
+        path: helm/pyapp
         helm:
-          releaseName: "{{branch}}"
           values: |
-            expose:
-              type: LoadBalancer
-            syncer:
-              extraArgs:
-                - --tls-san={{branch}}.vcluster.test.bahram.az
+            image:
+              repository: acrvclusterpoc.azurecr.io/pyapp
+              tag: "{{branch}}"
             ingress:
               enabled: true
-              host: "{{branch}}.vcluster.test.bahram.az"
+              className: nginx
+              host: "{{branch}}.test.bahram.az"
       destination:
-        server: https://kubernetes.default.svc
-        namespace: "{{branch}}-vcluster"
+        name: "{{branch}}-vcluster"
+        namespace: pyapp
       syncPolicy:
         automated:
           prune: true
