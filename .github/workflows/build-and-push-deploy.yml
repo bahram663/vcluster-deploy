@@ -103,7 +103,7 @@ jobs:
         run: |
           NS="${{ needs.build.outputs.namespace }}"
           kubectl create namespace $NS --dry-run=client -o yaml | kubectl apply -f -
-          kubectl label namespace $NS environment=preview branch=${{ needs.build.outputs.branch-slug }} --overwrite
+          kubectl label namespace $NS environment=preview branch=${{ needs.build.outputs.slug }} --overwrite
       
       - name: Setup Helm
         uses: azure/setup-helm@v4
@@ -111,20 +111,22 @@ jobs:
       - name: Deploy with Helm
         run: |
           NS="${{ needs.build.outputs.namespace }}"
-          HOST="${{ needs.build.outputs.branch-slug }}.${{ env.BASE_DOMAIN }}"
+          HOST="${{ needs.build.outputs.slug }}.${{ env.BASE_DOMAIN }}"
           
           helm upgrade --install pyapp ./helm/pyapp \
             --namespace=$NS \
             --create-namespace \
             --set image.repository=${{ steps.acr.outputs.server }}/pyapp \
             --set image.tag=${{ needs.build.outputs.image-tag }} \
+            --set env.APP_ENV=${{ needs.build.outputs.slug }} \
             --set ingress.enabled=true \
             --set ingress.className=nginx \
             --set ingress.host=$HOST \
+            --set ingress.tls=null \
             --timeout 5m \
             --wait
           
-          echo "🚀 Deployed to: https://$HOST"
+          echo "🚀 Deployed to: http://$HOST"
       
       - name: Show status
         run: |
@@ -144,7 +146,7 @@ jobs:
         id: meta
         run: |
           SLUG=$(echo "${{ github.event.ref }}" | tr '/._' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-63 | sed 's/-$//')
-          echo "namespace=branch-${SLUG}" >> $GITHUB_OUTPUT
+          echo "namespace=$SLUG" >> $GITHUB_OUTPUT
       
       - name: Azure Login (OIDC)
         uses: azure/login@v2
