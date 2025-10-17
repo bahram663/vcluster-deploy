@@ -20,11 +20,11 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    environment: preview  # This makes OIDC work for all branches!
+    environment: preview
     outputs:
       image-tag: ${{ steps.meta.outputs.tag }}
       namespace: ${{ steps.meta.outputs.namespace }}
-      branch-slug: ${{ steps.meta.outputs.slug }}
+      slug: ${{ steps.meta.outputs.slug }}
     
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +36,7 @@ jobs:
           echo "slug=$SLUG" >> $GITHUB_OUTPUT
           echo "namespace=$SLUG" >> $GITHUB_OUTPUT
           echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "Generated slug: $SLUG"
       
       - name: Azure Login (OIDC)
         uses: azure/login@v2
@@ -104,6 +105,7 @@ jobs:
           NS="${{ needs.build.outputs.namespace }}"
           kubectl create namespace $NS --dry-run=client -o yaml | kubectl apply -f -
           kubectl label namespace $NS environment=preview branch=${{ needs.build.outputs.slug }} --overwrite
+          echo "Created namespace: $NS"
       
       - name: Setup Helm
         uses: azure/setup-helm@v4
@@ -111,14 +113,20 @@ jobs:
       - name: Deploy with Helm
         run: |
           NS="${{ needs.build.outputs.namespace }}"
-          HOST="${{ needs.build.outputs.slug }}.${{ env.BASE_DOMAIN }}"
+          SLUG="${{ needs.build.outputs.slug }}"
+          HOST="${SLUG}.${{ env.BASE_DOMAIN }}"
+          
+          echo "Deploying:"
+          echo "  Namespace: $NS"
+          echo "  Slug: $SLUG"
+          echo "  Host: $HOST"
           
           helm upgrade --install pyapp ./helm/pyapp \
             --namespace=$NS \
             --create-namespace \
             --set image.repository=${{ steps.acr.outputs.server }}/pyapp \
             --set image.tag=${{ needs.build.outputs.image-tag }} \
-            --set env.APP_ENV=${{ needs.build.outputs.slug }} \
+            --set env.APP_ENV=$SLUG \
             --set ingress.enabled=true \
             --set ingress.className=nginx \
             --set ingress.host=$HOST \
@@ -147,6 +155,7 @@ jobs:
         run: |
           SLUG=$(echo "${{ github.event.ref }}" | tr '/._' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-63 | sed 's/-$//')
           echo "namespace=$SLUG" >> $GITHUB_OUTPUT
+          echo "Will delete namespace: $SLUG"
       
       - name: Azure Login (OIDC)
         uses: azure/login@v2
