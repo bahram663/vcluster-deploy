@@ -33,9 +33,8 @@ jobs:
         id: meta
         run: |
           SLUG=$(echo "${{ github.ref_name }}" | tr '/._' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-63 | sed 's/-$//')
-          NS="branch-${SLUG}"
           echo "slug=$SLUG" >> $GITHUB_OUTPUT
-          echo "namespace=$NS" >> $GITHUB_OUTPUT
+          echo "namespace=$SLUG" >> $GITHUB_OUTPUT
           echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
       
       - name: Azure Login (OIDC)
