@@ -1,0 +1,1 @@
+Isolated Namespace Application deployment
