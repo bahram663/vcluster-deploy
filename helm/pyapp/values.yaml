@@ -1,5 +1,5 @@
 image:
-  repository: <replace-at-runtime>
+  repository: acrvclusterpoc.azurecr.io/pyapp
   tag: "latest"
   pullPolicy: IfNotPresent
 
@@ -17,10 +17,22 @@ service:
 ingress:
   enabled: true
   className: nginx
-  baseDomain: test.bahram.az
+  host: ""  # Will be set at runtime
   tlsEnabled: false
-  tlsSecretName: ""
+  tls: []
 
-resources: {}
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
 
 

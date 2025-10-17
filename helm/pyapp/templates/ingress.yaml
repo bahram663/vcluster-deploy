@@ -1,23 +1,27 @@
-{{- if .Values.ingress.enabled }}
+{{- if .Values.ingress.enabled -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "pyapp.fullname" . }}
   labels:
-    app.kubernetes.io/name: {{ include "pyapp.name" . }}
-    app.kubernetes.io/instance: {{ .Release.Name }}
-  annotations: {}
+    {{- include "pyapp.labels" . | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
-  ingressClassName: {{ .Values.ingress.className | quote }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    {{- toYaml .Values.ingress.tls | nindent 4 }}
+  {{- end }}
   rules:
-    - host: {{ printf "%s.%s" .Release.Namespace .Values.ingress.baseDomain | quote }}
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ include "pyapp.fullname" . }}
-                port:
-                  number: {{ .Values.service.port }}
+  - host: {{ .Values.ingress.host }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "pyapp.fullname" . }}
+            port:
+              number: {{ .Values.service.port }}
 {{- end }}
