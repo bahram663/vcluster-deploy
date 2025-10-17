@@ -64,7 +64,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: ./app
+          context: .
+          file: ./Dockerfile
           push: true
           tags: |
             ${{ steps.acr.outputs.server }}/pyapp:${{ steps.meta.outputs.tag }}
