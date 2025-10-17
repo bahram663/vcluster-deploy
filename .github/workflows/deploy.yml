@@ -118,10 +118,10 @@ jobs:
           
           echo "Deploying:"
           echo "  Namespace: $NS"
-          echo "  Slug: $SLUG"
+          echo "  Release: $SLUG"
           echo "  Host: $HOST"
           
-          helm upgrade --install pyapp ./helm/pyapp \
+          helm upgrade --install $SLUG ./helm/pyapp \
             --namespace=$NS \
             --create-namespace \
             --set image.repository=${{ steps.acr.outputs.server }}/pyapp \
