@@ -1,49 +1,181 @@
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ include "pyapp.fullname" . }}
-  labels:
-    {{- include "pyapp.labels" . | nindent 4 }}
-spec:
-  {{- if not .Values.autoscaling.enabled }}
-  replicas: {{ .Values.replicaCount }}
-  {{- end }}
-  selector:
-    matchLabels:
-      {{- include "pyapp.selectorLabels" . | nindent 6 }}
-  template:
-    metadata:
-      labels:
-        {{- include "pyapp.selectorLabels" . | nindent 8 }}
-    spec:
-      {{- with .Values.image.pullSecrets }}
-      imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      containers:
-      - name: {{ .Chart.Name }}
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
-        ports:
-        - name: http
-          containerPort: {{ .Values.service.targetPort }}
-          protocol: TCP
-        env:
-        - name: APP_ENV
-          value: {{ .Values.env.APP_ENV | quote }}
-        - name: APP_MESSAGE
-          value: {{ .Values.env.APP_MESSAGE | default "Hello from AKS!" | quote }}
-        livenessProbe:
-          httpGet:
-            path: /healthz
-            port: http
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /healthz
-            port: http
-          initialDelaySeconds: 5
-          periodSeconds: 5
-        resources:
-          {{- toYaml .Values.resources | nindent 12 }}
+name: Deploy to AKS
+
+on:
+  push:
+    branches: ["**"]
+  delete:
+    branches: ["**"]
+
+env:
+  ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+  RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  AKS_CLUSTER: ${{ vars.AZURE_AKS_CLUSTER }}
+  BASE_DOMAIN: ${{ vars.BASE_DOMAIN }}
+
+jobs:
+  build:
+    name: Build & Push
+    if: github.event_name != 'delete'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment: preview
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tag }}
+      namespace: ${{ steps.meta.outputs.namespace }}
+      slug: ${{ steps.meta.outputs.slug }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Generate metadata
+        id: meta
+        run: |
+          SLUG=$(echo "${{ github.ref_name }}" | tr '/._' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-63 | sed 's/-$//')
+          echo "slug=$SLUG" >> $GITHUB_OUTPUT
+          echo "namespace=$SLUG" >> $GITHUB_OUTPUT
+          echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "Generated slug: $SLUG"
+      
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Get ACR
+        id: acr
+        run: |
+          SERVER=$(az acr show -n $ACR_NAME --query loginServer -o tsv)
+          TOKEN=$(az acr login -n $ACR_NAME --expose-token --query accessToken -o tsv)
+          echo "server=$SERVER" >> $GITHUB_OUTPUT
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+      
+      - name: Docker login
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.acr.outputs.server }}
+          username: 00000000-0000-0000-0000-000000000000
+          password: ${{ steps.acr.outputs.token }}
+      
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ steps.acr.outputs.server }}/pyapp:${{ steps.meta.outputs.tag }}
+            ${{ steps.acr.outputs.server }}/pyapp:${{ steps.meta.outputs.slug }}
+
+  deploy:
+    name: Deploy to AKS
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment: preview
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name: ${{ env.AKS_CLUSTER }}
+      
+      - name: Get ACR server
+        id: acr
+        run: echo "server=$(az acr show -n $ACR_NAME --query loginServer -o tsv)" >> $GITHUB_OUTPUT
+      
+      - name: Create namespace
+        run: |
+          NS="${{ needs.build.outputs.namespace }}"
+          kubectl create namespace $NS --dry-run=client -o yaml | kubectl apply -f -
+          kubectl label namespace $NS environment=preview branch=${{ needs.build.outputs.slug }} --overwrite
+          echo "Created namespace: $NS"
+      
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+      
+      - name: Deploy with Helm
+        run: |
+          NS="${{ needs.build.outputs.namespace }}"
+          SLUG="${{ needs.build.outputs.slug }}"
+          HOST="${SLUG}.${{ env.BASE_DOMAIN }}"
+          
+          echo "Deploying:"
+          echo "  Namespace: $NS"
+          echo "  Slug: $SLUG"
+          echo "  Host: $HOST"
+          
+          helm upgrade --install pyapp ./helm/pyapp \
+            --namespace=$NS \
+            --create-namespace \
+            --set image.repository=${{ steps.acr.outputs.server }}/pyapp \
+            --set image.tag=${{ needs.build.outputs.image-tag }} \
+            --set env.APP_ENV=$SLUG \
+            --set ingress.enabled=true \
+            --set ingress.className=nginx \
+            --set ingress.host=$HOST \
+            --set ingress.tls=null \
+            --timeout 5m \
+            --wait
+          
+          echo "🚀 Deployed to: http://$HOST"
+      
+      - name: Show status
+        run: |
+          kubectl get all,ingress -n ${{ needs.build.outputs.namespace }}
+
+  cleanup:
+    name: Cleanup
+    if: github.event_name == 'delete'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment: preview
+    
+    steps:
+      - name: Generate namespace
+        id: meta
+        run: |
+          SLUG=$(echo "${{ github.event.ref }}" | tr '/._' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-63 | sed 's/-$//')
+          echo "namespace=$SLUG" >> $GITHUB_OUTPUT
+          echo "Will delete namespace: $SLUG"
+      
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ vars.AZURE_RESOURCE_GROUP }}
+          cluster-name: ${{ vars.AZURE_AKS_CLUSTER }}
+      
+      - name: Delete namespace
+        run: |
+          NS="${{ steps.meta.outputs.namespace }}"
+          if kubectl get namespace $NS &> /dev/null; then
+            kubectl delete namespace $NS --timeout=5m
+            echo "✅ Deleted namespace: $NS"
+          else
+            echo "⚠️ Namespace not found: $NS"
+          fi
